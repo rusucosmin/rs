@@ -9,6 +9,7 @@ import os
 import sys
 import urllib
 import numpy as np
+import pandas as pd
 import matplotlib.image as mpimg
 from PIL import Image
 from argparse import ArgumentParser
@@ -17,7 +18,6 @@ import code
 
 import tensorflow.python.platform
 
-import numpy
 import tensorflow as tf
 
 NUM_CHANNELS = 3 # RGB images
@@ -28,18 +28,13 @@ VALIDATION_SIZE = 5  # Size of the validation set.
 SEED = 66478  # Set to None for random seed.
 BATCH_SIZE = 16 # 64
 NUM_EPOCHS = 100
-RESTORE_MODEL = True # If True, restore existing model instead of training a new one
 RECORDING_STEP = 1000
 
 # Set image patch size in pixels
 # IMG_PATCH_SIZE should be a multiple of 4
 # image size should be an integer multiple of this number!
 IMG_PATCH_SIZE = 16
-
-tf.app.flags.DEFINE_string('train_dir', '/tmp/rs',
-                           """Directory where to write event logs """
-                           """and checkpoint.""")
-FLAGS = tf.app.flags.FLAGS
+SUB_PATCH_SIZE = 16
 
 # Extract patches from a given image
 def img_crop(im, w, h):
@@ -79,12 +74,12 @@ def extract_data(filename, num_images):
     img_patches = [img_crop(imgs[i], IMG_PATCH_SIZE, IMG_PATCH_SIZE) for i in range(num_images)]
     data = [img_patches[i][j] for i in range(len(img_patches)) for j in range(len(img_patches[i]))]
 
-    return numpy.asarray(data)
+    return np.asarray(data)
 
 # Assign a label to a patch v
 def value_to_class(v):
     foreground_threshold = 0.25 # percentage of pixels > 1 required to assign a foreground label to a patch
-    df = numpy.sum(v)
+    df = np.sum(v)
     if df > foreground_threshold:
         return [0, 1]
     else:
@@ -106,24 +101,24 @@ def extract_labels(filename, num_images):
 
     num_images = len(gt_imgs)
     gt_patches = [img_crop(gt_imgs[i], IMG_PATCH_SIZE, IMG_PATCH_SIZE) for i in range(num_images)]
-    data = numpy.asarray([gt_patches[i][j] for i in range(len(gt_patches)) for j in range(len(gt_patches[i]))])
-    labels = numpy.asarray([value_to_class(numpy.mean(data[i])) for i in range(len(data))])
+    data = np.asarray([gt_patches[i][j] for i in range(len(gt_patches)) for j in range(len(gt_patches[i]))])
+    labels = np.asarray([value_to_class(np.mean(data[i])) for i in range(len(data))])
 
     # Convert to dense 1-hot representation.
-    return labels.astype(numpy.float32)
+    return labels.astype(np.float32)
 
 
 def error_rate(predictions, labels):
     """Return the error rate based on dense predictions and 1-hot labels."""
     return 100.0 - (
         100.0 *
-        numpy.sum(numpy.argmax(predictions, 1) == numpy.argmax(labels, 1)) /
+        np.sum(np.argmax(predictions, 1) == np.argmax(labels, 1)) /
         predictions.shape[0])
 
 # Write predictions from neural network to a file
 def write_predictions_to_file(predictions, labels, filename):
-    max_labels = numpy.argmax(labels, 1)
-    max_predictions = numpy.argmax(predictions, 1)
+    max_labels = np.argmax(labels, 1)
+    max_predictions = np.argmax(predictions, 1)
     file = open(filename, "w")
     n = predictions.shape[0]
     for i in range(0, n):
@@ -132,13 +127,13 @@ def write_predictions_to_file(predictions, labels, filename):
 
 # Print predictions from neural network
 def print_predictions(predictions, labels):
-    max_labels = numpy.argmax(labels, 1)
-    max_predictions = numpy.argmax(predictions, 1)
+    max_labels = np.argmax(labels, 1)
+    max_predictions = np.argmax(predictions, 1)
     print (str(max_labels) + ' ' + str(max_predictions))
 
 # Convert array of labels to an image
 def label_to_img(imgwidth, imgheight, w, h, labels):
-    array_labels = numpy.zeros([imgwidth, imgheight])
+    array_labels = np.zeros([imgwidth, imgheight])
     idx = 0
     for i in range(0,imgheight,h):
         for j in range(0,imgwidth,w):
@@ -151,8 +146,8 @@ def label_to_img(imgwidth, imgheight, w, h, labels):
     return array_labels
 
 def img_float_to_uint8(img):
-    rimg = img - numpy.min(img)
-    rimg = (rimg / numpy.max(rimg) * PIXEL_DEPTH).round().astype(numpy.uint8)
+    rimg = img - np.min(img)
+    rimg = (rimg / np.max(rimg) * PIXEL_DEPTH).round().astype(np.uint8)
     return rimg
 
 def concatenate_images(img, gt_img):
@@ -160,21 +155,21 @@ def concatenate_images(img, gt_img):
     w = gt_img.shape[0]
     h = gt_img.shape[1]
     if nChannels == 3:
-        cimg = numpy.concatenate((img, gt_img), axis=1)
+        cimg = np.concatenate((img, gt_img), axis=1)
     else:
-        gt_img_3c = numpy.zeros((w, h, 3), dtype=numpy.uint8)
+        gt_img_3c = np.zeros((w, h, 3), dtype=np.uint8)
         gt_img8 = img_float_to_uint8(gt_img)
         gt_img_3c[:,:,0] = gt_img8
         gt_img_3c[:,:,1] = gt_img8
         gt_img_3c[:,:,2] = gt_img8
         img8 = img_float_to_uint8(img)
-        cimg = numpy.concatenate((img8, gt_img_3c), axis=1)
+        cimg = np.concatenate((img8, gt_img_3c), axis=1)
     return cimg
 
 def make_img_overlay(img, predicted_img):
     w = img.shape[0]
     h = img.shape[1]
-    color_mask = numpy.zeros((w, h, 3), dtype=numpy.uint8)
+    color_mask = np.zeros((w, h, 3), dtype=np.uint8)
     color_mask[:,:,0] = predicted_img*PIXEL_DEPTH
 
     img8 = img_float_to_uint8(img)
@@ -186,7 +181,9 @@ def make_img_overlay(img, predicted_img):
 
 def main(argv=None):  # pylint: disable=unused-argument
     global TRAINING_SIZE
-    if argv[0]:
+    train, restore_model, model_dir = argv
+
+    if train:
         # Training
         data_dir = 'data/training/'
         train_data_filename = data_dir + 'images/'
@@ -196,7 +193,7 @@ def main(argv=None):  # pylint: disable=unused-argument
         if TRAINING_SIZE is None:
             TRAINING_SIZE = len(os.listdir(train_data_filename))
 
-        # Extract it into numpy arrays.
+        # Extract it into np arrays.
         train_data = extract_data(train_data_filename, TRAINING_SIZE)
         train_labels = extract_labels(train_labels_filename, TRAINING_SIZE)
 
@@ -246,21 +243,15 @@ def main(argv=None):  # pylint: disable=unused-argument
         data_dir = 'data/test_set_images'
         # Get data from all images
         images = os.listdir(data_dir)
-        test_imgs = []
+        test_imgs = {}
         for image in images:
             image_filename = os.path.join(data_dir, image, image + '.png')
             print ('Loading ' + image_filename)
             img = mpimg.imread(image_filename)
-            test_imgs.append(img)
-
-        IMG_WIDTH = test_imgs[0].shape[0]
-        IMG_HEIGHT = test_imgs[0].shape[1]
-        N_PATCHES_PER_IMAGE = (IMG_WIDTH/IMG_PATCH_SIZE)*(IMG_HEIGHT/IMG_PATCH_SIZE)
-
-        num_images = len(test_imgs)
-        img_patches = [img_crop(test_imgs[i], IMG_PATCH_SIZE, IMG_PATCH_SIZE) for i in range(num_images)]
-        data = [img_patches[i][j] for i in range(len(img_patches)) for j in range(len(img_patches[i]))]
-        test_data = np.asarray(data)
+            img_id = '0' + image.split('_')[1]
+            if len(img_id) == 2:
+                img_id = f'0{img_id}'
+            test_imgs[img_id] = img
 
     # The variables below hold all the trainable weights. They are passed an
     # initial value which will be assigned when when we call:
@@ -312,13 +303,13 @@ def main(argv=None):  # pylint: disable=unused-argument
 
     # Get prediction for given input image
     def get_prediction(img):
-        data = numpy.asarray(img_crop(img, IMG_PATCH_SIZE, IMG_PATCH_SIZE))
+        data = np.asarray(img_crop(img, IMG_PATCH_SIZE, IMG_PATCH_SIZE))
         data_node = tf.constant(data)
         output = tf.nn.softmax(model(data_node))
         output_prediction = s.run(output)
         img_prediction = label_to_img(img.shape[0], img.shape[1], IMG_PATCH_SIZE, IMG_PATCH_SIZE, output_prediction)
 
-        return img_prediction
+        return np.ones_like(img_prediction) - img_prediction
 
     # Get a concatenation of the prediction and groundtruth for given input file
     def get_prediction_with_groundtruth(filename, image_idx):
@@ -410,7 +401,7 @@ def main(argv=None):  # pylint: disable=unused-argument
 
         return out
 
-    if argv[0]:
+    if train:
         # Training computation: logits + cross-entropy loss.
         logits = model(train_data_node, True) # BATCH_SIZE*NUM_LABELS
         # print 'logits = ' + str(logits.get_shape()) + ' train_labels_node = ' + str(train_labels_node.get_shape())
@@ -460,9 +451,9 @@ def main(argv=None):  # pylint: disable=unused-argument
 
     # Create a local session to run this computation.
     with tf.Session() as s:
-        if RESTORE_MODEL:
+        if restore_model:
             # Restore variables from disk.
-            saver.restore(s, FLAGS.train_dir + "/model.ckpt")
+            saver.restore(s, model_dir + "/model.ckpt")
             print("Model restored.")
         else:
             # Run all the initializers to prepare the trainable parameters.
@@ -470,7 +461,7 @@ def main(argv=None):  # pylint: disable=unused-argument
 
             # Build the summary operation based on the TF collection of Summaries.
             summary_op = tf.summary.merge_all()
-            summary_writer = tf.summary.FileWriter(FLAGS.train_dir,
+            summary_writer = tf.summary.FileWriter(model_dir,
                                                     graph_def=s.graph_def)
             print ('Initialized!')
             # Loop through training steps.
@@ -479,7 +470,7 @@ def main(argv=None):  # pylint: disable=unused-argument
             training_indices = range(train_size)
             for iepoch in range(num_epochs):
                 # Permute training indices
-                perm_indices = numpy.random.permutation(training_indices)
+                perm_indices = np.random.permutation(training_indices)
                 for step in range (int(train_size / BATCH_SIZE)):
                     offset = (step * BATCH_SIZE) % (train_size - BATCH_SIZE)
                     batch_indices = perm_indices[offset:(offset + BATCH_SIZE)]
@@ -488,7 +479,7 @@ def main(argv=None):  # pylint: disable=unused-argument
                     # Note that we could use better randomization across epochs.
                     batch_data = train_data[batch_indices, :, :, :]
                     batch_labels = train_labels[batch_indices]
-                    # This dictionary maps the batch data (as a numpy array) to the
+                    # This dictionary maps the batch data (as a np array) to the
                     # node in the graph is should be fed to.
                     feed_dict = {train_data_node: batch_data,
                                  train_labels_node: batch_labels}
@@ -516,10 +507,10 @@ def main(argv=None):  # pylint: disable=unused-argument
                             feed_dict=feed_dict)
 
                 # Save the variables to disk.
-                save_path = saver.save(s, FLAGS.train_dir + "/model.ckpt")
+                save_path = saver.save(s, model_dir + "/model.ckpt")
                 print("Model saved in file: %s" % save_path)
 
-        if argv[1]:
+        if train:
             # Training
             print("Running prediction on training set")
             prediction_training_dir = "predictions_training/"
@@ -527,29 +518,54 @@ def main(argv=None):  # pylint: disable=unused-argument
                 os.mkdir(prediction_training_dir)
             for i in range(1, TRAINING_SIZE+1):
                 pimg = get_prediction_with_groundtruth(train_data_filename, i)
-                Image.fromarray(pimg).save(prediction_training_dir + "prediction_" + str(i) + ".png")
+                Image.fromarray(pimg).save(os.path.join(prediction_training_dir, f"prediction_{i}.png"))
                 oimg = get_prediction_with_overlay(train_data_filename, i)
-                oimg.save(prediction_training_dir + "overlay_" + str(i) + ".png")
+                oimg.save(os.path.join(prediction_training_dir f"overlay_{i}.png"))
         else:
             # Testing
             print("Running prediction on test set")
             prediction_test_dir = "predictions_test/"
             if not os.path.isdir(prediction_test_dir):
                 os.mkdir(prediction_test_dir)
-            for i in range(len(test_imgs)):
-                pimg = get_prediction(test_imgs[i])
-                cimg = concatenate_images(test_imgs[i], pimg)
-                Image.fromarray(cimg).save(prediction_test_dir + "prediction_" + str(i) + ".png")
-                oimg = make_img_overlay(test_imgs[i], pimg)
-                oimg.save(prediction_test_dir + "overlay_" + str(i) + ".png")
+
+            submission = {'id': [], 'prediction': []}
+            test_keys = sorted(test_imgs.keys())
+            for key in test_keys:
+                # Generate image files
+                pimg = get_prediction(test_imgs[key])
+                cimg = concatenate_images(test_imgs[key], pimg)
+                Image.fromarray(cimg).save(os.path.join(prediction_test_dir, f"prediction_{key}.png"))
+                oimg = make_img_overlay(test_imgs[key], pimg)
+                oimg.save(os.path.join(prediction_test_dir, f"overlay_{key}.png"))
+                # Generate submission
+                n, m = pimg.shape
+                for i in range(0, n, SUB_PATCH_SIZE):
+                    for j in range(0, m, SUB_PATCH_SIZE):
+                        patch = pimg[i:i+SUB_PATCH_SIZE, j:j+SUB_PATCH_SIZE]
+                        foreground_thresh = 0.25
+                        ones = np.sum(patch)
+                        if ones > foreground_thresh * SUB_PATCH_SIZE ** 2:
+                            submission['prediction'].append(1)
+                        else:
+                            submission['prediction'].append(0)
+                        patch_id = f'{key}_{i}_{j}'
+                        submission['id'].append(patch_id)
+                # Write submission file
+                submission_df = pd.DataFrame(submission)
+                submission_df.to_csv(os.path.join(prediction_test_dir, 'submission.csv'), index=False)
+
 
 if __name__ == '__main__':
     argparser = ArgumentParser()
     argparser.add_argument('--train', type=str, default='True',
         help='choose whether to train or test model')
-    argparser.add_argument('--model_path', type=str, default='',
-        help='path to the model to load, used only in case of testing')
+    argparser.add_argument('--restore_model', type=str, default='False',
+        help='choose whether to restore the model')
+    argparser.add_argument('--model_dir', type=str, default='model',
+        help='directory where to store the model')
 
     args = argparser.parse_args()
     args.train = (args.train == 'True')
-    tf.app.run(argv=[args.train, args.model_path])
+    args.restore_model = (args.restore_model == 'True')
+    # tf.app.run(argv=[args.train, args.restore_model])
+    main([args.train, args.restore_model, args.model_dir])
