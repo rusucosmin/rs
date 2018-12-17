@@ -6,8 +6,6 @@ from PIL import Image
 import re
 # Helper functions
 
-print(mpimg)
-
 def load_image(infilename):
     data = mpimg.imread(infilename)
     return data

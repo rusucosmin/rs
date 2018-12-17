@@ -109,3 +109,9 @@ venv.bak/
 training/
 test_set_images/
 data/
+
+*.csv
+*.h5
+*.zip
+*.jpg
+*.png
