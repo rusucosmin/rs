@@ -1,0 +1,1 @@
+When training a linear classifier (logistic regression), we obtain an F1-score of 0.598 on the test set.

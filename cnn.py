@@ -4,6 +4,7 @@ This simple baseline consits of a CNN with two convolutional+pooling layers with
 
 Credits: Aurelien Lucchi, ETH Zürich
 """
+
 import gzip
 import os
 import sys
@@ -15,20 +16,18 @@ from PIL import Image
 from argparse import ArgumentParser
 
 import code
-
 import tensorflow.python.platform
-
 import tensorflow as tf
 
-NUM_CHANNELS = 3 # RGB images
+NUM_CHANNELS = 3  # RGB images
 PIXEL_DEPTH = 255
 NUM_LABELS = 2
-TRAINING_SIZE = None
+TRAINING_SIZE = 100
 VALIDATION_SIZE = 5  # Size of the validation set.
 SEED = 66478  # Set to None for random seed.
-BATCH_SIZE = 16 # 64
+BATCH_SIZE = 16  # 64
 NUM_EPOCHS = 100
-RECORDING_STEP = 1000
+RECORDING_STEP = 0
 
 # Set image patch size in pixels
 # IMG_PATCH_SIZE should be a multiple of 4
@@ -37,21 +36,30 @@ IMG_PATCH_SIZE = 16
 SUB_PATCH_SIZE = 16
 
 # Extract patches from a given image
-def img_crop(im, w, h):
+def img_crop(im, w, h, step=None):
     list_patches = []
     imgwidth = im.shape[0]
     imgheight = im.shape[1]
     is_2d = len(im.shape) < 3
-    for i in range(0,imgheight,h):
-        for j in range(0,imgwidth,w):
+
+    # No step provided means that we'll take disjoint patches
+    if step is None:
+        step = h
+    for i in range(0, imgheight - h + 1, step):
+        for j in range(0, imgwidth - w + 1, step):
             if is_2d:
                 im_patch = im[j:j+w, i:i+h]
             else:
                 im_patch = im[j:j+w, i:i+h, :]
             list_patches.append(im_patch)
+            # Add multiple of 90 degrees rotations as well
+            # list_patches.append(np.rot90(im_patch, 1))
+            # list_patches.append(np.rot90(im_patch, 2))
+            # list_patches.append(np.rot90(im_patch, 3))
     return list_patches
 
-def extract_data(filename, num_images):
+
+def extract_data(filename, num_images, crop_step=None):
     """Extract the images into a 4D tensor [image index, y, x, channels].
     Values are rescaled from [0, 255] down to [-0.5, 0.5].
     """
@@ -60,47 +68,48 @@ def extract_data(filename, num_images):
         imageid = "satImage_%.3d" % i
         image_filename = filename + imageid + ".png"
         if os.path.isfile(image_filename):
-            print ('Loading ' + image_filename)
+            print('Loading ' + image_filename)
             img = mpimg.imread(image_filename)
             imgs.append(img)
         else:
-            print ('File ' + image_filename + ' does not exist')
+            print('File ' + image_filename + ' does not exist')
 
     num_images = len(imgs)
     IMG_WIDTH = imgs[0].shape[0]
     IMG_HEIGHT = imgs[0].shape[1]
-    N_PATCHES_PER_IMAGE = (IMG_WIDTH/IMG_PATCH_SIZE)*(IMG_HEIGHT/IMG_PATCH_SIZE)
 
-    img_patches = [img_crop(imgs[i], IMG_PATCH_SIZE, IMG_PATCH_SIZE) for i in range(num_images)]
+    img_patches = [img_crop(imgs[i], IMG_PATCH_SIZE, IMG_PATCH_SIZE, crop_step) for i in range(num_images)]
     data = [img_patches[i][j] for i in range(len(img_patches)) for j in range(len(img_patches[i]))]
 
     return np.asarray(data)
 
+
 # Assign a label to a patch v
 def value_to_class(v):
-    foreground_threshold = 0.25 # percentage of pixels > 1 required to assign a foreground label to a patch
+    foreground_threshold = 0.25  # percentage of pixels > 1 required to assign a foreground label to a patch
     df = np.sum(v)
-    if df > foreground_threshold:
+    if df > foreground_threshold:  # road
         return [0, 1]
-    else:
+    else:  # bgrd
         return [1, 0]
 
+
 # Extract label images
-def extract_labels(filename, num_images):
+def extract_labels(filename, num_images, crop_step=None):
     """Extract the labels into a 1-hot matrix [image index, label index]."""
     gt_imgs = []
-    for i in range(1, num_images+1):
+    for i in range(1, num_images + 1):
         imageid = "satImage_%.3d" % i
         image_filename = filename + imageid + ".png"
         if os.path.isfile(image_filename):
-            print ('Loading ' + image_filename)
+            print('Loading ' + image_filename)
             img = mpimg.imread(image_filename)
             gt_imgs.append(img)
         else:
-            print ('File ' + image_filename + ' does not exist')
+            print('File ' + image_filename + ' does not exist')
 
     num_images = len(gt_imgs)
-    gt_patches = [img_crop(gt_imgs[i], IMG_PATCH_SIZE, IMG_PATCH_SIZE) for i in range(num_images)]
+    gt_patches = [img_crop(gt_imgs[i], IMG_PATCH_SIZE, IMG_PATCH_SIZE, crop_step) for i in range(num_images)]
     data = np.asarray([gt_patches[i][j] for i in range(len(gt_patches)) for j in range(len(gt_patches[i]))])
     labels = np.asarray([value_to_class(np.mean(data[i])) for i in range(len(data))])
 
@@ -115,6 +124,7 @@ def error_rate(predictions, labels):
         np.sum(np.argmax(predictions, 1) == np.argmax(labels, 1)) /
         predictions.shape[0])
 
+
 # Write predictions from neural network to a file
 def write_predictions_to_file(predictions, labels, filename):
     max_labels = np.argmax(labels, 1)
@@ -125,52 +135,57 @@ def write_predictions_to_file(predictions, labels, filename):
         file.write(max_labels(i) + ' ' + max_predictions(i))
     file.close()
 
+
 # Print predictions from neural network
 def print_predictions(predictions, labels):
     max_labels = np.argmax(labels, 1)
     max_predictions = np.argmax(predictions, 1)
-    print (str(max_labels) + ' ' + str(max_predictions))
+    print(str(max_labels) + ' ' + str(max_predictions))
+
 
 # Convert array of labels to an image
 def label_to_img(imgwidth, imgheight, w, h, labels):
     array_labels = np.zeros([imgwidth, imgheight])
     idx = 0
-    for i in range(0,imgheight,h):
-        for j in range(0,imgwidth,w):
-            if labels[idx][0] > 0.5:
-                l = 1
-            else:
+    for i in range(0, imgheight, h):
+        for j in range(0, imgwidth, w):
+            if labels[idx][0] > 0.5:  # bgrd
                 l = 0
+            else:
+                l = 1
             array_labels[j:j+w, i:i+h] = l
             idx = idx + 1
     return array_labels
+
 
 def img_float_to_uint8(img):
     rimg = img - np.min(img)
     rimg = (rimg / np.max(rimg) * PIXEL_DEPTH).round().astype(np.uint8)
     return rimg
 
+
 def concatenate_images(img, gt_img):
-    nChannels = len(gt_img.shape)
+    n_channels = len(gt_img.shape)
     w = gt_img.shape[0]
     h = gt_img.shape[1]
-    if nChannels == 3:
+    if n_channels == 3:
         cimg = np.concatenate((img, gt_img), axis=1)
     else:
         gt_img_3c = np.zeros((w, h, 3), dtype=np.uint8)
         gt_img8 = img_float_to_uint8(gt_img)
-        gt_img_3c[:,:,0] = gt_img8
-        gt_img_3c[:,:,1] = gt_img8
-        gt_img_3c[:,:,2] = gt_img8
+        gt_img_3c[:, :, 0] = gt_img8
+        gt_img_3c[:, :, 1] = gt_img8
+        gt_img_3c[:, :, 2] = gt_img8
         img8 = img_float_to_uint8(img)
         cimg = np.concatenate((img8, gt_img_3c), axis=1)
     return cimg
+
 
 def make_img_overlay(img, predicted_img):
     w = img.shape[0]
     h = img.shape[1]
     color_mask = np.zeros((w, h, 3), dtype=np.uint8)
-    color_mask[:,:,0] = predicted_img*PIXEL_DEPTH
+    color_mask[:, :, 0] = predicted_img*PIXEL_DEPTH
 
     img8 = img_float_to_uint8(img)
     background = Image.fromarray(img8, 'RGB').convert("RGBA")
@@ -180,8 +195,7 @@ def make_img_overlay(img, predicted_img):
 
 
 def main(argv=None):  # pylint: disable=unused-argument
-    global TRAINING_SIZE
-    train, restore_model, model_dir = argv
+    train, restore_model, model_dir, crop_step = argv
 
     if train:
         # Training
@@ -189,33 +203,30 @@ def main(argv=None):  # pylint: disable=unused-argument
         train_data_filename = data_dir + 'images/'
         train_labels_filename = data_dir + 'groundtruth/'
 
-        # Train from all images in case no train size is given
-        if TRAINING_SIZE is None:
-            TRAINING_SIZE = len(os.listdir(train_data_filename))
-
         # Extract it into np arrays.
-        train_data = extract_data(train_data_filename, TRAINING_SIZE)
-        train_labels = extract_labels(train_labels_filename, TRAINING_SIZE)
+        train_data = extract_data(train_data_filename, TRAINING_SIZE, crop_step)
+        train_labels = extract_labels(train_labels_filename, TRAINING_SIZE, crop_step)
 
+        print("Data shape", train_data.shape, train_labels.shape)
         num_epochs = NUM_EPOCHS
 
-        c0 = 0
-        c1 = 0
+        c0 = 0  # bgrd
+        c1 = 0  # road
         for i in range(len(train_labels)):
             if train_labels[i][0] == 1:
                 c0 = c0 + 1
             else:
                 c1 = c1 + 1
-        print ('Number of data points per class: c0 = ' + str(c0) + ' c1 = ' + str(c1))
+        print('Number of data points per class: c0 = ' + str(c0) + ' c1 = ' + str(c1))
 
-        print ('Balancing training data...')
+        print('Balancing training data...')
         min_c = min(c0, c1)
         idx0 = [i for i, j in enumerate(train_labels) if j[0] == 1]
         idx1 = [i for i, j in enumerate(train_labels) if j[1] == 1]
         new_indices = idx0[0:min_c] + idx1[0:min_c]
-        print (len(new_indices))
-        print (train_data.shape)
-        train_data = train_data[new_indices,:,:,:]
+        print(len(new_indices))
+        print(train_data.shape)
+        train_data = train_data[new_indices, :, :, :]
         train_labels = train_labels[new_indices]
 
         train_size = train_labels.shape[0]
@@ -227,7 +238,7 @@ def main(argv=None):  # pylint: disable=unused-argument
                 c0 = c0 + 1
             else:
                 c1 = c1 + 1
-        print ('Number of data points per class: c0 = ' + str(c0) + ' c1 = ' + str(c1))
+        print('Number of data points per class: c0 = ' + str(c0) + ' c1 = ' + str(c1))
 
         # This is where training samples and labels are fed to the graph.
         # These placeholder nodes will be fed a batch of training data at each
@@ -278,7 +289,7 @@ def main(argv=None):  # pylint: disable=unused-argument
     fc2_biases = tf.Variable(tf.constant(0.1, shape=[NUM_LABELS]))
 
     # Make an image summary for 4d tensor image with index idx
-    def get_image_summary(img, idx = 0):
+    def get_image_summary(img, idx=0):
         V = tf.slice(img, (0, 0, 0, idx), (1, -1, -1, 1))
         img_w = img.get_shape().as_list()[1]
         img_h = img.get_shape().as_list()[2]
@@ -309,10 +320,11 @@ def main(argv=None):  # pylint: disable=unused-argument
         output_prediction = s.run(output)
         img_prediction = label_to_img(img.shape[0], img.shape[1], IMG_PATCH_SIZE, IMG_PATCH_SIZE, output_prediction)
 
-        return np.ones_like(img_prediction) - img_prediction
+        return img_prediction
 
     # Get a concatenation of the prediction and groundtruth for given input file
     def get_prediction_with_groundtruth(filename, image_idx):
+
         imageid = "satImage_%.3d" % image_idx
         image_filename = filename + imageid + ".png"
         img = mpimg.imread(image_filename)
@@ -324,6 +336,7 @@ def main(argv=None):  # pylint: disable=unused-argument
 
     # Get prediction overlaid on the original image for given input file
     def get_prediction_with_overlay(filename, image_idx):
+
         imageid = "satImage_%.3d" % image_idx
         image_filename = filename + imageid + ".png"
         img = mpimg.imread(image_filename)
@@ -354,14 +367,14 @@ def main(argv=None):  # pylint: disable=unused-argument
                               padding='SAME')
 
         conv2 = tf.nn.conv2d(pool,
-                            conv2_weights,
-                            strides=[1, 1, 1, 1],
-                            padding='SAME')
+                             conv2_weights,
+                             strides=[1, 1, 1, 1],
+                             padding='SAME')
         relu2 = tf.nn.relu(tf.nn.bias_add(conv2, conv2_biases))
         pool2 = tf.nn.max_pool(relu2,
-                              ksize=[1, 2, 2, 1],
-                              strides=[1, 2, 2, 1],
-                              padding='SAME')
+                               ksize=[1, 2, 2, 1],
+                               strides=[1, 2, 2, 1],
+                               padding='SAME')
 
         # Uncomment these lines to check the size of each layer
         # print 'data ' + str(data.get_shape())
@@ -369,7 +382,6 @@ def main(argv=None):  # pylint: disable=unused-argument
         # print 'relu ' + str(relu.get_shape())
         # print 'pool ' + str(pool.get_shape())
         # print 'pool2 ' + str(pool2.get_shape())
-
 
         # Reshape the feature map cuboid into a 2D matrix to feed it to the
         # fully connected layers.
@@ -382,31 +394,33 @@ def main(argv=None):  # pylint: disable=unused-argument
         hidden = tf.nn.relu(tf.matmul(reshape, fc1_weights) + fc1_biases)
         # Add a 50% dropout during training only. Dropout also scales
         # activations such that no rescaling is needed at evaluation time.
-        #if train:
+        # if train:
         #    hidden = tf.nn.dropout(hidden, 0.5, seed=SEED)
         out = tf.matmul(hidden, fc2_weights) + fc2_biases
 
-        if train == True:
+        if train:
             summary_id = '_0'
             s_data = get_image_summary(data)
-            filter_summary0 = tf.summary.image('summary_data' + summary_id, s_data)
+            tf.summary.image('summary_data' + summary_id, s_data)
             s_conv = get_image_summary(conv)
-            filter_summary2 = tf.summary.image('summary_conv' + summary_id, s_conv)
+            tf.summary.image('summary_conv' + summary_id, s_conv)
             s_pool = get_image_summary(pool)
-            filter_summary3 = tf.summary.image('summary_pool' + summary_id, s_pool)
+            tf.summary.image('summary_pool' + summary_id, s_pool)
             s_conv2 = get_image_summary(conv2)
-            filter_summary4 = tf.summary.image('summary_conv2' + summary_id, s_conv2)
+            tf.summary.image('summary_conv2' + summary_id, s_conv2)
             s_pool2 = get_image_summary(pool2)
-            filter_summary5 = tf.summary.image('summary_pool2' + summary_id, s_pool2)
-
+            tf.summary.image('summary_pool2' + summary_id, s_pool2)
         return out
 
     if train:
         # Training computation: logits + cross-entropy loss.
-        logits = model(train_data_node, True) # BATCH_SIZE*NUM_LABELS
+        logits = model(train_data_node, True)  # BATCH_SIZE*NUM_LABELS
         # print 'logits = ' + str(logits.get_shape()) + ' train_labels_node = ' + str(train_labels_node.get_shape())
-        loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(
-            labels=train_labels_node, logits=logits))
+
+        loss = tf.reduce_mean(
+            tf.nn.softmax_cross_entropy_with_logits_v2(labels=train_labels_node,
+                                                       logits=logits))
+
         tf.summary.scalar('loss', loss)
 
         all_params_node = [conv1_weights, conv1_biases, conv2_weights, conv2_biases, fc1_weights, fc1_biases, fc2_weights, fc2_biases]
@@ -434,6 +448,7 @@ def main(argv=None):  # pylint: disable=unused-argument
             train_size,          # Decay step.
             0.95,                # Decay rate.
             staircase=True)
+        # tf.scalar_summary('learning_rate', learning_rate)
         tf.summary.scalar('learning_rate', learning_rate)
 
         # Use simple momentum for the optimization.
@@ -455,6 +470,7 @@ def main(argv=None):  # pylint: disable=unused-argument
             # Restore variables from disk.
             saver.restore(s, model_dir + "/model.ckpt")
             print("Model restored.")
+
         else:
             # Run all the initializers to prepare the trainable parameters.
             tf.global_variables_initializer().run()
@@ -462,16 +478,23 @@ def main(argv=None):  # pylint: disable=unused-argument
             # Build the summary operation based on the TF collection of Summaries.
             summary_op = tf.summary.merge_all()
             summary_writer = tf.summary.FileWriter(model_dir,
-                                                    graph_def=s.graph_def)
-            print ('Initialized!')
+                                                   graph=s.graph)
+
+            print('Initialized!')
             # Loop through training steps.
-            print ('Total number of iterations = ' + str(int(num_epochs * train_size / BATCH_SIZE)))
+            print('Total number of iterations = ' + str(int(num_epochs * train_size / BATCH_SIZE)))
 
             training_indices = range(train_size)
+
             for iepoch in range(num_epochs):
+
                 # Permute training indices
                 perm_indices = np.random.permutation(training_indices)
-                for step in range (int(train_size / BATCH_SIZE)):
+
+                steps_per_epoch = int(train_size / BATCH_SIZE)
+
+                for step in range(steps_per_epoch):
+
                     offset = (step * BATCH_SIZE) % (train_size - BATCH_SIZE)
                     batch_indices = perm_indices[offset:(offset + BATCH_SIZE)]
 
@@ -484,17 +507,14 @@ def main(argv=None):  # pylint: disable=unused-argument
                     feed_dict = {train_data_node: batch_data,
                                  train_labels_node: batch_labels}
 
-                    if step % RECORDING_STEP == 0:
+                    if step == 0:
                         summary_str, _, l, lr, predictions = s.run(
                             [summary_op, optimizer, loss, learning_rate, train_prediction],
                             feed_dict=feed_dict)
-                        #summary_str = s.run(summary_op, feed_dict=feed_dict)
-                        summary_writer.add_summary(summary_str, step)
+                        summary_writer.add_summary(summary_str, iepoch * steps_per_epoch)
                         summary_writer.flush()
 
-                        # print_predictions(predictions, batch_labels)
-
-                        print('Epoch %.2f' % iepoch)
+                        print('Epoch %d' % iepoch)
                         print('Minibatch loss: %.3f, learning rate: %.6f' % (l, lr))
                         print('Minibatch error: %.1f%%' % error_rate(predictions,
                                                                      batch_labels))
@@ -516,11 +536,11 @@ def main(argv=None):  # pylint: disable=unused-argument
             prediction_training_dir = "predictions_training/"
             if not os.path.isdir(prediction_training_dir):
                 os.mkdir(prediction_training_dir)
-            for i in range(1, TRAINING_SIZE+1):
+            for i in range(1, TRAINING_SIZE + 1):
                 pimg = get_prediction_with_groundtruth(train_data_filename, i)
-                Image.fromarray(pimg).save(os.path.join(prediction_training_dir, f"prediction_{i}.png"))
+                Image.fromarray(pimg).save(prediction_training_dir + "prediction_" + str(i) + ".png")
                 oimg = get_prediction_with_overlay(train_data_filename, i)
-                oimg.save(os.path.join(prediction_training_dir f"overlay_{i}.png"))
+                oimg.save(prediction_training_dir + "overlay_" + str(i) + ".png")
         else:
             # Testing
             print("Running prediction on test set")
@@ -539,8 +559,8 @@ def main(argv=None):  # pylint: disable=unused-argument
                 oimg.save(os.path.join(prediction_test_dir, f"overlay_{key}.png"))
                 # Generate submission
                 n, m = pimg.shape
-                for i in range(0, n, SUB_PATCH_SIZE):
-                    for j in range(0, m, SUB_PATCH_SIZE):
+                for j in range(0, m, SUB_PATCH_SIZE):
+                    for i in range(0, n, SUB_PATCH_SIZE):
                         patch = pimg[i:i+SUB_PATCH_SIZE, j:j+SUB_PATCH_SIZE]
                         foreground_thresh = 0.25
                         ones = np.sum(patch)
@@ -548,7 +568,7 @@ def main(argv=None):  # pylint: disable=unused-argument
                             submission['prediction'].append(1)
                         else:
                             submission['prediction'].append(0)
-                        patch_id = f'{key}_{i}_{j}'
+                        patch_id = f'{key}_{j}_{i}'
                         submission['id'].append(patch_id)
                 # Write submission file
                 submission_df = pd.DataFrame(submission)
@@ -563,9 +583,12 @@ if __name__ == '__main__':
         help='choose whether to restore the model')
     argparser.add_argument('--model_dir', type=str, default='model',
         help='directory where to store the model')
+    argparser.add_argument('--crop_step', type=int, default=16,
+        help='distance in pixels between consecutive patches to use in the \
+        training set')
 
     args = argparser.parse_args()
     args.train = (args.train == 'True')
     args.restore_model = (args.restore_model == 'True')
     # tf.app.run(argv=[args.train, args.restore_model])
-    main([args.train, args.restore_model, args.model_dir])
+    main([args.train, args.restore_model, args.model_dir, args.crop_step])
