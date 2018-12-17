@@ -53,9 +53,9 @@ def img_crop(im, w, h, step=None):
                 im_patch = im[j:j+w, i:i+h, :]
             list_patches.append(im_patch)
             # Add multiple of 90 degrees rotations as well
-            list_patches.append(np.rot90(im_patch, 1))
-            list_patches.append(np.rot90(im_patch, 2))
-            list_patches.append(np.rot90(im_patch, 3))
+            # list_patches.append(np.rot90(im_patch, 1))
+            # list_patches.append(np.rot90(im_patch, 2))
+            # list_patches.append(np.rot90(im_patch, 3))
     return list_patches
 
 
@@ -591,4 +591,4 @@ if __name__ == '__main__':
     args.train = (args.train == 'True')
     args.restore_model = (args.restore_model == 'True')
     # tf.app.run(argv=[args.train, args.restore_model])
-    main([args.train, args.restore_model, args.model_dir])
+    main([args.train, args.restore_model, args.model_dir, args.crop_step])
