@@ -20,14 +20,24 @@ WINDOW_SIZE = 72
 PATCH_SIZE = 16 # each patch is 16*16 pixels
 PADDING_SIZE = (WINDOW_SIZE - PATCH_SIZE) // 2
 
+
 def mask_to_submission_strings(model, image_filename, prediction_dir):
-    """ Reads a single image and outputs the strings that should go into the submission file. """
+    '''
+    Reads a single image and outputs the strings that should go into the
+    submission file, along with producing the image predictions
+    input:  model - model to run on the image
+            image_filename - image file to run the predition on
+            prediction_dir - directory where to store the prediction images
+    '''
     img_number = int(re.search(r"\d+", image_filename).group(0))
+    # Load the image
     Xi = load_image(image_filename)
+    # Predict the labels for image patches
     Zi = model.predict(Xi)
     Zi = Zi.reshape(-1)
     nb = 0
     cnt = np.zeros(2)
+    # Produce the submission file entries
     print("Processing " + image_filename)
     for j in range(0, Xi.shape[1], PATCH_SIZE):
         for i in range(0, Xi.shape[0], PATCH_SIZE):
@@ -47,17 +57,22 @@ def mask_to_submission_strings(model, image_filename, prediction_dir):
 
 
 def generate_submission(model, submission_filename, image_filenames):
-    """ Generate a .csv containing the classification of the test set. """
+    '''
+    Generate a csv file containing the classification of the test set
+    input:  model - model to be run on the test set
+            submission_filename - name of the submission file
+            image_filenames - the list of test image files
+    '''
     print("Running prediction on test set")
+    # Create the directory where to store the prediction images
     prediction_test_dir = "predictions_test/"
     if not os.path.isdir(prediction_test_dir):
         os.mkdir(prediction_test_dir)
-
+    # Write the predictions in the submission file
     with open(submission_filename, 'w') as f:
         f.write('id,prediction\n')
         for fn in image_filenames:
             f.writelines(['{}\n'.format(s) for s in mask_to_submission_strings(model, fn, prediction_test_dir)])
-
 
 
 class ViaNet:
@@ -65,19 +80,22 @@ class ViaNet:
         self.model = self.build_model()
 
     def predict(self, X):
+        # Prepare the patches to be fed to the network
         patches = img_crop_v2(pad_image(X, PADDING_SIZE), WINDOW_SIZE, WINDOW_SIZE, PATCH_SIZE, PATCH_SIZE)
         img_patches = np.zeros(shape=(len(patches), WINDOW_SIZE, WINDOW_SIZE, 3))
         for index_patch, patch in enumerate(patches):
             img_patches[index_patch] = patch
+        # Run the model on the image patches
         Z = self.model.predict(img_patches)
         Z = (Z[:,0] < Z[:,1]) * 1
         Z = Z.reshape(img_patches.shape[0], -1)
         return Z
 
     def build_model(self, useMaxPool=True, useReLU=True):
-        INPUT_SHAPE=(WINDOW_SIZE, WINDOW_SIZE, 3)
+        INPUT_SHAPE = (WINDOW_SIZE, WINDOW_SIZE, 3)
         REG = 1e-6
 
+        # Define the model's architecture
         model = Sequential()
         model.add(Conv2D(filters=128,
                          kernel_size=(5, 5),
@@ -135,10 +153,10 @@ class ViaNet:
         model.add(Activation('softmax'))
 
         return model
-    
-    def load_weights(self, filename = 'model.h5'):
-        self.model.load_weights(filename)
 
+    def load_weights(self, filename = 'model.h5'):
+        # Load the weights of a pretrained model
+        self.model.load_weights(filename)
 
     def train(self, X, Y, augment_data=True):
         # Define optimizer
@@ -146,12 +164,14 @@ class ViaNet:
         self.model.compile(loss='categorical_crossentropy',
                   optimizer=opt,
                   metrics=['accuracy'])
-    
+
+        # Set training parameters
         batch_size = 125
         samples_per_epoch = X.shape[0]*X.shape[1]*X.shape[2]//256
         nb_epoch = 200
         nb_classes = 2
 
+        # Define the learning rate scheduler, early stopping and model saver
         lr_callback = ReduceLROnPlateau(monitor='loss',
                                     factor=0.2,
                                     patience=5,
@@ -186,7 +206,8 @@ class ViaNet:
                     gt_sub_image = Y[idx][center[0]-PATCH_SIZE//2:center[0]+PATCH_SIZE//2,
                                           center[1]-PATCH_SIZE//2:center[1]+PATCH_SIZE//2]
 
-                    # The label does not depend on the image rotation/flip (provided that the rotation is in steps of 90°)
+                    # The label does not depend on the image rotation/flip
+                    # (provided that the rotation is in steps of 90°)
                     threshold = 0.25
                     label = (np.array([np.mean(gt_sub_image)]) > threshold) * 1
 
@@ -210,12 +231,14 @@ class ViaNet:
                 yield (X_batch, Y_batch)
 
         if augment_data:
+            # Use data augmentation
             self.model.fit_generator(generate_minibatch(),
                 steps_per_epoch=1000,
                 epochs=nb_epoch,
                 verbose=1,
                 callbacks=[checkpoint_callback, stop_callback])
         else:
+            # Fit the model without augmentation
             self.model.fit(X, Y, callbacks=[stop_callback, checkpoint_callback])
 
 
@@ -228,16 +251,17 @@ if __name__ == '__main__':
     # Build model
     model = ViaNet()
 
+    # Train the model or load it direcctly
     if args.train == 'True':
-        # Loaded a set of images
+        # Loaded the training set
         root_dir = "data/training/"
-
+        # Load training data
         image_dir = root_dir + "images/"
         files = os.listdir(image_dir)
         n = len(files)
         print("Loading " + str(n) + " images")
         imgs = [load_image(image_dir + files[i]) for i in range(n)]
-
+        # Load the groundtruth images
         gt_dir = root_dir + "groundtruth/"
         print("Loading " + str(n) + " images")
         gt_imgs = [load_image(gt_dir + files[i]) for i in range(n)]
@@ -245,7 +269,9 @@ if __name__ == '__main__':
         # Train the model
         model.train(np.asarray(imgs), np.asarray(gt_imgs))
     else:
+        # Load a pretrained model
         model.load_weights('model.h5')
 
-    generate_submission(self.model, f'cnn_v{int(time())}.csv', \
+    # Run the model on the test set and generate submission
+    generate_submission(model, f'cnn_v{int(time())}.csv', \
         [f'data/test_set_images/test_{str(i)}/test_{str(i)}.png' for i in range(1, 51)])
