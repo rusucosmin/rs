@@ -9,6 +9,7 @@ The set of satellite images are acquired from Google Maps. Provided were also gr
 The dataset is available from the [CrowdAI page](https://www.crowdai.org/challenges/epfl-ml-road-segmentation).
 
 Our best submission [22878](https://www.crowdai.org/challenges/47/submissions/2287), got an F1-Score [F1 score](https://en.wikipedia.org/wiki/F1_score) of `0.832`.
+The model's parameters can be downloaded from [here](https://drive.google.com/file/d/1TV85S74RPpRP8OwOVjyvU5XhP-LNi0RP/view?usp=sharing).
 
 
 # Libraries
